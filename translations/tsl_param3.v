@@ -22,10 +22,14 @@ Fixpoint tsl_rec0 (n : nat) (t : term) {struct t} : term :=
   | tCase ik t u br => tCase ik (tsl_rec0 n t) (tsl_rec0 n u)
                             (map (fun x => (fst x, tsl_rec0 n (snd x))) br)
   | tProj p t => tProj p (tsl_rec0 n t)
-  (* | tFix : mfixpoint term -> nat -> term *)
-  (* | tCoFix : mfixpoint term -> nat -> term *)
+  | tFix fs k => tFix (map (map_def (tsl_rec0 n)) fs) k (*wrong, fixme*)
+  | tCoFix fs k => tCoFix (map (map_def (tsl_rec0 n)) fs) k (*wrong, fixme*)
   | _ => t
   end.
+(* Require Import ssreflect ssrbool ssrfun. *)
+
+Definition trivial_match (rarg : nat) (ty : term) (ter : term) : term := todo.
+Definition regroup0 (n : nat) (ter : term) : term := todo.
 
 Fixpoint tsl_rec1_app (app : option term) (E : tsl_table) (t : term) : term :=
   let tsl_rec1 := tsl_rec1_app None in
@@ -101,6 +105,23 @@ Fixpoint tsl_rec1_app (app : option term) (E : tsl_table) (t : term) : term :=
             (map (on_snd (tsl_rec1 E)) brs)
     | _ => debug "tCase" (match (fst ik) with mkInd s _ => s end)
     end
+  | tFix fs k =>
+    let N := List.length fs in
+    let fs0 := map (map_def (tsl_rec0 0)) fs in
+    let fs1 := map (fun dt =>
+      let rai := 2 * dt.(rarg) + 1 in let tyi := (tsl_rec1 E dt.(dtype)) in
+      mkdef _ (tsl_name tsl_ident dt.(dname)) tyi
+         (tLetIn (nNamed "modfix") tyi (tsl_rec1 E dt.(dbody))
+                 (trivial_match rai (lift0 1 tyi) (tRel 0)))
+         rai) fs in
+    fold_left_i (fun term i f0 => tLetIn (nNamed ("fix" ++ string_of_int k))
+                (nth k fs0 f0).(dtype) (tFix fs0 i) term) (rev fs0)
+    (tFix (map_i (fun i dt =>
+      mkdef _ dt.(dname)
+              (subst_app (lift0 N dt.(dtype)) [tRel (N - S i)])
+              (regroup0 N (lift N (2 * N) dt.(dbody)))
+              dt.(rarg)) fs1) k)
+
   | _ => todo
   end in
   match app with Some t' => mkApp t1 (t' {3 := tRel 1} {2 := tRel 0})
