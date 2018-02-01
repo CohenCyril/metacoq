@@ -22,8 +22,12 @@ Fixpoint tsl_rec0 (n : nat) (t : term) {struct t} : term :=
   | tCase ik t u br => tCase ik (tsl_rec0 n t) (tsl_rec0 n u)
                             (map (fun x => (fst x, tsl_rec0 n (snd x))) br)
   | tProj p t => tProj p (tsl_rec0 n t)
-  | tFix fs k => tFix (map (map_def (tsl_rec0 n)) fs) k (*wrong, fixme*)
-  | tCoFix fs k => tCoFix (map (map_def (tsl_rec0 n)) fs) k (*wrong, fixme*)
+  | tFix fs k => tFix (map (fun df => mkdef _
+           df.(dname) (tsl_rec0 n df.(dtype))
+           (tsl_rec0 (n + k) df.(dbody)) df.(rarg)) fs) k
+  | tCoFix fs k => tCoFix (map (fun df => mkdef _
+           df.(dname) (tsl_rec0 n df.(dtype))
+           (tsl_rec0 (n + k) df.(dbody)) df.(rarg)) fs) k
   | _ => t
   end.
 (* Require Import ssreflect ssrbool ssrfun. *)
