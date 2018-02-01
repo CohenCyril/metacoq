@@ -9,6 +9,7 @@ Infix "<=" := Nat.leb.
 
 Definition default_term := tVar "constant_not_found".
 Definition debug_term msg:= tVar ("debug: " ++ msg).
+Definition ttodo := tConst "Translations.translation_utils.todo" [].
 
 Fixpoint tsl_rec0 (n : nat) (t : term) {struct t} : term :=
   match t with
@@ -47,7 +48,7 @@ Fixpoint trivial_match (get_ind : kername -> minductive_decl)
     | tInd (mkInd indname indnum) _ =>
       let (p, bodys) := get_ind indname in
       let body := nth indnum bodys (dummy_inductive_body "trivial_match") in
-      todo
+      mkApps ttodo [ty]
     | _ => debug_term "trivial_match: not an inductive"
     end
   | S n, tProd na A B =>
