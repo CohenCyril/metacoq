@@ -32,10 +32,57 @@ Fixpoint tsl_rec0 (n : nat) (t : term) {struct t} : term :=
   end.
 (* Require Import ssreflect ssrbool ssrfun. *)
 
-Definition trivial_match (rarg : nat) (ty : term) (ter : term) : term := todo.
-Definition regroup0 (n : nat) (ter : term) : term := todo.
+Definition unapp (t : term) : term * list term :=
+  match t with tApp t lu => (t, lu) | _ => (t, []) end.
 
-Fixpoint tsl_rec1_app (app : option term) (E : tsl_table) (t : term) : term :=
+Definition dummy_inductive_body function_name :=
+  mkinductive_body (function_name ++ ": wrong inductive") (tRel 0) [] [] [].
+Definition dummy_minductive_decl := Build_minductive_decl 0 [].
+
+Fixpoint trivial_match (get_ind : kername -> minductive_decl)
+         (rarg : nat) (ty : term) (ter : term) : term :=
+  match rarg, ty with
+  | 0, tProd na A B => let (cind, args) := unapp B in
+    match cind with
+    | tInd (mkInd indname indnum) _ =>
+      let (p, bodys) := get_ind indname in
+      let body := nth indnum bodys (dummy_inductive_body "trivial_match") in
+      todo
+    | _ => debug_term "trivial_match: not an inductive"
+    end
+  | S n, tProd na A B =>
+    tLambda nAnon A (trivial_match get_ind n B (lift 1 1 ter))
+  | _, _ => debug_term "trivial_match: not enough products"
+  end.
+
+Fixpoint regroup (n : nat) k (t : term) : term :=
+  match t with
+  | tRel i => if S i <= 2 * n then tRel ((Nat.modulo i 2) * n + (Nat.div i 2))
+                           else tRel i
+  | tEvar ev args => tEvar ev (List.map (regroup n k) args)
+  | tLambda na T M => tLambda na (regroup n k T) (regroup n (S k) M)
+  | tApp u v => tApp (regroup n k u) (List.map (regroup n k) v)
+  | tProd na A B => tProd na (regroup n k A) (regroup n (S k) B)
+  | tCast c kind t => tCast (regroup n k c) kind (regroup n k t)
+  | tLetIn na b t b' => tLetIn na (regroup n k b) (regroup n k t) (regroup n (S k) b')
+  | tCase ind p c brs =>
+    let brs' := List.map (on_snd (regroup n k)) brs in
+    tCase ind (regroup n k p) (regroup n k c) brs'
+  | tProj p c => tProj p (regroup n k c)
+  | tFix mfix idx =>
+    let k' := List.length mfix + k in
+    let mfix' := List.map (map_def (regroup n k')) mfix in
+    tFix mfix' idx
+  | tCoFix mfix idx =>
+    let k' := List.length mfix + k in
+    let mfix' := List.map (map_def (regroup n k')) mfix in
+    tCoFix mfix' idx
+  | x => x
+  end.
+Notation regroup0 n := (regroup n 0).
+
+Fixpoint tsl_rec1_app get_ind (app : option term) (E : tsl_table) (t : term) : term :=
+  let tsl_rec1_app := tsl_rec1_app get_ind in
   let tsl_rec1 := tsl_rec1_app None in
   let debug case symbol :=
       debug_term ("tsl_rec1: " ++ case ++ " " ++ symbol ++ " not found") in
@@ -116,7 +163,7 @@ Fixpoint tsl_rec1_app (app : option term) (E : tsl_table) (t : term) : term :=
       let rai := 2 * dt.(rarg) + 1 in let tyi := (tsl_rec1 E dt.(dtype)) in
       mkdef _ (tsl_name tsl_ident dt.(dname)) tyi
          (tLetIn (nNamed "modfix") tyi (tsl_rec1 E dt.(dbody))
-                 (trivial_match rai (lift0 1 tyi) (tRel 0)))
+                 (trivial_match get_ind rai (lift0 1 tyi) (tRel 0)))
          rai) fs in
     fold_left_i (fun term i f0 => tLetIn (nNamed ("fix" ++ string_of_int k))
                 (nth k fs0 f0).(dtype) (tFix fs0 i) term) (rev fs0)
@@ -131,9 +178,9 @@ Fixpoint tsl_rec1_app (app : option term) (E : tsl_table) (t : term) : term :=
   match app with Some t' => mkApp t1 (t' {3 := tRel 1} {2 := tRel 0})
                | None => t1 end
   end.
-Definition tsl_rec1 := tsl_rec1_app None.
+Definition tsl_rec1_ get_ind := tsl_rec1_app get_ind None.
 
-Definition tsl_mind_decl (E : tsl_table)
+Definition tsl_mind_decl_ (get_ind : kername -> minductive_decl) (E : tsl_table)
            (kn kn' : kername) (mind : minductive_decl) : tsl_table * list minductive_decl.
   refine (_, [{| ind_npars := 2 * mind.(ind_npars); ind_bodies := _ |}]).
   - refine (fold_left_i (fun E i ind => _ :: _ ++ E)%list mind.(ind_bodies) []).
@@ -150,7 +197,7 @@ Definition tsl_mind_decl (E : tsl_table)
               ind_ctors := _;
               ind_projs := [] |}. (* todo *)
     + (* arity  *)
-      refine (let ar := subst_app (tsl_rec1 E ind.(ind_type))
+      refine (let ar := subst_app (tsl_rec1_ get_ind E ind.(ind_type))
                                   [tInd (mkInd kn i) []] in
               ar).
     + (* constructors *)
@@ -158,19 +205,59 @@ Definition tsl_mind_decl (E : tsl_table)
       intros k ((name, typ), nargs).
       refine (tsl_ident name, _, 2 * nargs).
       refine (subst_app _ [tConstruct (mkInd kn i) k []]).
-      refine (fold_left_i (fun t0 i u  => t0 {S i := u}) _ (tsl_rec1 E typ)).
+      refine (fold_left_i (fun t0 i u  => t0 {S i := u}) _ (tsl_rec1_ get_ind E typ)).
       (* [I_n-1; ... I_0] *)
       refine (rev (map_i (fun i _ => tInd (mkInd kn i) [])
                               mind.(ind_bodies))).
 Defined.
 
+Definition swap_list_monad {M} {monadM : Monad M} {T} (l : list (M T)) : M (list T) :=
+  monad_fold_left (fun r mx => x <- mx;; ret (cons x r)) l [].
+Definition monad_concat {M} {monadM : Monad M} {T} (l : list (M (list T))) : M (list T) :=
+  l <- swap_list_monad l;; ret (concat l).
+Definition monad_map {T : Type -> Type} `{Monad T} {A B : Type} (f : A -> T B) (l : list A) : T (list B) :=
+  swap_list_monad (map f l).
+
+Definition tmQuoteInductivesOf (t : term) : TemplateMonad (kername -> minductive_decl) :=
+  let entry := (global_reference * minductive_decl)%type in
+  let monad_concat := @monad_concat TemplateMonad TemplateMonad_Monad entry in
+  let fix collect (t : term) : TemplateMonad (table minductive_decl) :=
+      match t with
+      | tInd (mkInd name _) _ =>  tmBind (tmQuoteInductive name) (fun decl =>
+                                  @tmReturn (list entry) [(ConstRef name, decl)])
+      | tEvar k ts => monad_concat (map collect ts)
+      | tCast t c a => monad_concat [collect t; collect a]
+      | tProd na A B => monad_concat [collect A; collect B]
+      | tLambda na A t => monad_concat [collect A; collect t]
+      | tLetIn na t A u => monad_concat [collect t; collect A; collect u]
+      | tApp t lu => monad_concat [collect t; monad_concat (map collect lu)]
+      | tCase ik t u br => monad_concat [collect t; collect u;
+                           monad_concat (map (fun x => collect (snd x)) br)]
+      | tProj p t => collect t
+      | tFix fs k | tCoFix fs k => monad_concat (map (fun df =>
+         monad_concat [collect df.(dtype); collect df.(dbody)]) fs)
+      | tRel _ | tVar _ | tMeta _ | tSort _ | tConst _ _ | tConstruct _ _ _ => tmReturn nil
+  end in
+  tmBind (collect t) (fun table =>
+  tmReturn (fun k => option_get dummy_minductive_decl (@lookup_table minductive_decl table (ConstRef k)))).
+
+Definition tsl_rec1 E t : TemplateMonad term :=
+  get_ind <- tmQuoteInductivesOf t;;
+  ret (tsl_rec1_ get_ind E t).
+
+Definition tsl_mind_decl (E : tsl_table) (kn kn' : kername) (mind : minductive_decl) :
+   TemplateMonad (tsl_table * list minductive_decl)%type :=
+   get_ind <- tmQuoteInductivesOf (tInd (mkInd kn 0) []);;
+   ret (tsl_mind_decl_ get_ind E kn kn' mind).
+
 
 Run TemplateProgram (tm <- tmQuote (forall A, A -> A) ;;
-                     let tm' := tsl_rec1 [] tm in
+                     get_ind <- tmQuoteInductivesOf tm;;
+                     tm' <- tsl_rec1 [] tm;;
                      tmUnquote tm' >>= tmPrint).
 
 Run TemplateProgram (tm <- tmQuote (fun A (x : A) => x) ;;
-                     let tm' := tsl_rec1 [] tm in
+                     tm' <- tsl_rec1 [] tm;;
                      tmUnquote tm' >>= tmPrint).
 
 Goal ((fun f : forall A : Type, A -> A =>
@@ -179,13 +266,12 @@ Goal ((fun f : forall A : Type, A -> A =>
 reflexivity.
 Defined.
 
-
+(* Breaks because tsl_result is not related to TemplateMonad *)
 Instance param : Translation :=
   {| tsl_id := tsl_ident ;
-     tsl_tm := fun ΣE t => ret (tsl_rec1 (snd ΣE) t) ;
+     tsl_tm := fun ΣE t => tsl_rec1 (snd ΣE) t;
      tsl_ty := fun '(Σ, E) t => todo "not meaningful here" ;
-     tsl_ind := fun ΣE kn kn' mind => ret (tsl_mind_decl (snd ΣE) kn kn' mind) |}.
-
+     tsl_ind := fun ΣE kn kn' mind => tsl_mind_decl (snd ΣE) kn kn' mind |}.
 
 Definition T := forall A, A -> A.
 Run TemplateProgram (tTranslate emptyTC "T").
