@@ -104,6 +104,7 @@ Definition tTranslate {tsl : Translation} (ΣE : tsl_context) (id : ident)
       match t' with
       | Error e => print_nf e ;; fail_nf ("Translation error during the translation of the body of " ++ id)
       | Success t' =>
+        print_nf  (id ++ " is being translated to " ++ string_of_term t') ;;
         tmMkDefinition id' t' ;;
         let decl := {| cst_universes := univs;
                        cst_type := A; cst_body := Some t |} in

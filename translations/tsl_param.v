@@ -10,6 +10,8 @@ Infix "<=" := Nat.leb.
 Definition default_term := tVar "constant_not_found".
 Definition debug_term msg:= tVar ("debug: " ++ msg).
 Definition ttodo := tConst "Translations.translation_utils.todo" [].
+Definition tytodo := mkApp ttodo (tSort []).
+Definition gentodo := mkApp ttodo tytodo.
 
 Fixpoint tsl_rec0 (n : nat) (t : term) {struct t} : term :=
   match t with
@@ -41,15 +43,74 @@ Definition dummy_inductive_body function_name :=
     (function_name ++ ": wrong inductive") (tRel 0) [] [] [].
 Definition dummy_minductive_decl := Build_mutual_inductive_body 0 [].
 
+Fixpoint subst_prods (args : list term) (ty : term) : term :=
+  match args, ty with
+  | [], _ => ty
+  | hd :: tl, tProd na A B => subst_prods tl (B {0 := hd})
+  | _, _ => debug_term "subst_prod: no prod to substitute"
+end.
+
+Fixpoint generalize k (Σ : global_context) (x : term) (t : term) : term :=
+  let gen k := generalize k Σ x in
+  if eq_term (snd Σ) t x then tRel 0 else
+  match t with
+  | tRel i => if Nat.leb k i then tRel (S i) else tRel i
+  | tEvar ev args => tEvar ev (List.map (gen k) args)
+  | tLambda na T M => tLambda na (gen k T) (gen (S k) M)
+  | tApp u v => tApp (gen k u) (List.map (gen k) v)
+  | tProd na A B => tProd na (gen k A) (gen (S k) B)
+  | tCast c kind t => tCast (gen k c) kind (gen k t)
+  | tLetIn na b t b' => tLetIn na (gen k b) (gen k t) (gen (S k) b')
+  | tCase ind p c brs =>
+    let brs' := List.map (on_snd (gen k)) brs in
+    tCase ind (gen k p) (gen k c) brs'
+  | tProj p c => tProj p (gen k c)
+  | tFix mfix idx =>
+    let k' := List.length mfix + k in
+    let mfix' := List.map (map_def (gen k')) mfix in
+    tFix mfix' idx
+  | tCoFix mfix idx =>
+    let k' := List.length mfix + k in
+    let mfix' := List.map (map_def (gen k')) mfix in
+    tCoFix mfix' idx
+  | x => x
+  end.
+
+
+Fixpoint abstract (Σ : global_context)
+  (t : term) (args : list term) (ty : term) : term :=
+  match args, ty with
+  | [], _ => t
+  | hd :: tl, tProd na A B =>
+    tLambda na A (generalize 0 Σ hd (abstract Σ t tl B))
+  | _, _ => debug_term "abstract: no prod to type the abstraction"
+  end.
+
 Fixpoint trivial_match (Σ : global_context) (rarg : nat) (ty : term) (ter : term) : term :=
   match rarg, ty with
   | 0, tProd na A B => let (cind, args) := unapp B in
     match cind with
     | tInd (mkInd indname indnum) _ =>
       match lookup_env Σ indname with
-      | Some (InductiveDecl _ (Build_mutual_inductive_body p bodies _univ)) =>
+      | Some (InductiveDecl _ decl) =>
+        let (p, bodies, _univ) := decl in
         let body := nth indnum bodies (dummy_inductive_body "trivial_match") in
-        mkApps ttodo [ty]
+        let (_, indty, _, indKs, _) := body in
+        let (largs, rargs) := (firstn rarg args, skipn rarg args) in
+        let rindty := subst_prods largs indty in
+        let matchtype := abstract Σ (tLambda na A B) rargs rindty in
+        let absf := abstract Σ (lift rarg 1 ter) rargs rindty in
+        let branches := map_i (fun i (ktn : ident * term * nat)  =>
+          match ktn with (kname, kty, kargs) =>
+            let rk := mkApps (tVar kname) largs in
+            let rtys := substl largs kty in
+            let (_ind, indexes) := unapp rtys in
+            (i, tLetIn nAnon kty rk (subst_app absf indexes))
+          end
+          ) indKs in
+        tLambda na A (tCase
+          (mkInd indname indnum, decl.(ind_npars))
+          matchtype (tRel 0) branches)
       | _ => debug_term ("trivial_match: inductive " ++ indname ++
                          "not in global context")
       end
@@ -168,6 +229,7 @@ Fixpoint tsl_rec1_app (app : option term) (ΣE : tsl_context) (t : term) : term 
       let rai := 2 * dt.(rarg) + 1 in let tyi := (tsl_rec1 ΣE dt.(dtype)) in
       mkdef _ (tsl_name tsl_ident dt.(dname)) tyi
          (tLetIn (nNamed "modfix") tyi (tsl_rec1 ΣE dt.(dbody))
+                 (mkApp gentodo (lift0 1 tyi))
                  (trivial_match Σ rai (lift0 1 tyi) (tRel 0)))
          rai) fs in
     fold_left_i (fun term i f0 => tLetIn (nNamed ("fix" ++ string_of_int k))
@@ -326,7 +388,9 @@ Run TemplateProgram (TC <- tTranslate emptyTC "list" ;;
                      TC <- tTranslate TC "rev_type" ;;
                      tmDefinition "list_TC" TC ).
 
+Fail Run TemplateProgram (tTranslate nat_TC "plus" ).
 
+(* LetIn(fix0,Prod(n,Ind(Coq.Init.Datatypes.nat,0,[]),Prod(m,Ind(Coq.Init.Datatypes.nat,0,[]),Ind(Coq.Init.Datatypes.nat,0,[]))),TODO string_of_term,TODO string_of_term)" *)
 
 (* Definition isequiv (A B : Type) (f : A -> B) := *)
 (*   exists (g : B -> A), (forall x, g (f x) = x) × (forall y, f (g y) = y). *)
